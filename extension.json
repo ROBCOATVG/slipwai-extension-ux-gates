@@ -1,0 +1,14 @@
+{
+  "name": "UX gates",
+  "description": "Installs the ux-ui-agent-skills kit under tools/ and adds its objective gates to make verify: no literal colour, size or duration outside the design tokens, and real-render contrast, focus, target-size, responsive and axe checks over screen previews where a browser is present. Needs a browser app.",
+  "kind": "extension",
+  "core": ">=9.0,<10",
+  "publisher": "ROBCOATVG",
+  "tags": [
+    "dev-tooling"
+  ],
+  "ignore": "tools/ux-gates/\n",
+  "hooks": {
+    "init": "init.py"
+  }
+}
