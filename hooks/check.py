@@ -25,14 +25,18 @@ browser, four of them per preview, so the time is linear in `screens/` and every
 project with 225 previews spent 24 minutes here, two at a time on a two-processor runner. Three switches
 spread that, and none changes what passing means:
 
-- `UX_GATES_JOBS=<n>` runs that many gates at once; the default is one per processor.
+- `UX_GATES_JOBS=<n>` runs that many gates at once; the default is the session's `SLIPWAI_BROWSERS`, where
+  slipwai's captain started it, and one per processor otherwise. Several slices verifying on one machine
+  each took one per processor: hr-test-2 had twenty Chromes open for one slice, at a load of two hundred.
 - `UX_GATES_SHARD=<k>/<n>` runs every n-th gate from the k-th, so n CI jobs cover every gate exactly once
   between them. `verify.yml`'s `ux-gates` matrix, which the extension writes, is the one that sets it.
 - `UX_GATES_SINCE=<ref>` renders only the previews whose own file, or a local stylesheet they link or
   `@import`, changed since the merge base with `<ref>` (the working tree counts), and the directory gates
   only for an app with such a preview. Every preview again when this script, the extension, the lockfile
   or `verify.yml` moved, or when Git cannot answer. A pull request sets it; `main` never does, because
-  `main` deploys and a browser upgrade arrives without a diff. The file gate over `src/` always runs.
+  `main` deploys and a browser upgrade arrives without a diff. The file gate over `src/` always runs. A
+  session slipwai's captain started is a slice on its way to trunk, as a pull request is, so its
+  `SLIPWAI_TRUNK` is the ref where `UX_GATES_SINCE` is unset.
 
 Standard library only, like every gate script here; the kit's scripts are run as subprocesses.
 """
@@ -208,14 +212,14 @@ def git(*arguments: str) -> str | None:
     return completed.stdout if completed.returncode == 0 else None
 
 
-def changed_since(ref: str) -> set[str] | None:
+def changed_since(ref: str, named: str = "UX_GATES_SINCE") -> set[str] | None:
     """What differs from the merge base with `ref`, working tree and untracked files included, relative to
     this project; None when Git cannot say, or when something every preview depends on is among it."""
     base = git("merge-base", ref, "HEAD")
     diff = git("diff", "--name-only", "--relative", base.strip()) if base else None
     untracked = git("ls-files", "--others", "--exclude-standard")
     if diff is None or untracked is None:
-        say(f"check-ux-gates: UX_GATES_SINCE={ref} — Git cannot name a merge base, so every preview is in scope")
+        say(f"check-ux-gates: {named}={ref} — Git cannot name a merge base, so every preview is in scope")
         return None
     changed = set(diff.split()) | set(untracked.split())
     here = Path(__file__).resolve()
@@ -224,7 +228,7 @@ def changed_since(ref: str) -> set[str] | None:
     moved = sorted(path.relative_to(ROOT).as_posix() for path in everything
                    if path.is_relative_to(ROOT) and path.relative_to(ROOT).as_posix() in changed)
     if moved:
-        say(f"check-ux-gates: UX_GATES_SINCE={ref} — {', '.join(moved)} changed, so every preview is in scope")
+        say(f"check-ux-gates: {named}={ref} — {', '.join(moved)} changed, so every preview is in scope")
         return None
     return changed
 
@@ -312,10 +316,12 @@ def run(gate: Gate, preload: Path | None = None) -> str:
 
 
 def jobs() -> int:
-    try:
-        return max(1, int(os.environ.get("UX_GATES_JOBS", "")))
-    except ValueError:
-        return os.cpu_count() or 1
+    for name in ("UX_GATES_JOBS", "SLIPWAI_BROWSERS"):
+        try:
+            return max(1, int(os.environ.get(name, "")))
+        except ValueError:
+            continue
+    return os.cpu_count() or 1
 
 
 def main() -> int:
@@ -346,13 +352,14 @@ def main() -> int:
             return 1
         gates = sharded
         say(f"check-ux-gates: shard {spec} — {len(gates)} of {whole} gate(s)")
-    since = os.environ.get("UX_GATES_SINCE", "").strip()
-    changed = changed_since(since) if since else None
+    named = "UX_GATES_SINCE" if os.environ.get("UX_GATES_SINCE", "").strip() else "SLIPWAI_TRUNK"
+    since = os.environ.get(named, "").strip()
+    changed = changed_since(since, named) if since else None
     unchanged = 0
     if changed is not None:
         kept = scoped(gates, changed)
         unchanged, gates = len(gates) - len(kept), kept
-        say(f"check-ux-gates: UX_GATES_SINCE={since} — {unchanged} render gate(s) over previews nothing changed, "
+        say(f"check-ux-gates: {named}={since} — {unchanged} render gate(s) over previews nothing changed, "
             "not rendered")
     skipped = 0
     render = [gate for gate in gates if gate.render]
