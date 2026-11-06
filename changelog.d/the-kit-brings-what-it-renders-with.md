@@ -1,0 +1,5 @@
+PATCH
+
+**The render gates run where the extension is adopted, not only where a project happened to add Playwright.** The kit's render gates import Playwright and inject axe-core, and the kit declares neither: a project that never added Playwright itself had render gates that reported *skipped, not passed* on every run, and `make verify` green throughout — recap's, for fifteen days, while 22 of its screens ran 91px off a 280px phone. Adopting the extension now installs Playwright 1.64.1 and axe-core 4.10.2 into the kit's own `node_modules`, ignored by Git with the kit, and Playwright's Chromium, so the project's manifest is never touched. The same pre-fix checkout of recap, with only this extension, failed the overflow gate in 43 s.
+
+**The CI job runs the gate that exists.** The `ux-gates` job the extension writes into `verify.yml` ran `scripts/check-ux-gates.py`, which no checkout has had since the gate moved to `scripts/extensions/ux-gates/hooks/check.py`; every shard failed with *No such file or directory*. It runs the hook now, and installs Chromium from the kit's directory, for the kit's own Playwright.
