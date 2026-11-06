@@ -21,18 +21,24 @@ or as a failure when `UX_GATES_REQUIRE=1`, which is what to set wherever the kit
 app: nothing to measure.
 
 What it costs is per screen, and that is the part a project feels. Each per-file gate launches its own
-browser, four of them per preview, so the time is linear in `screens/` and every UX slice adds to it — a
+browser — Playwright's Chromium wherever it is installed, an installed Chrome only where it is not — four of them
+per preview, so the time is linear in `screens/` and every UX slice adds to it — a
 project with 225 previews spent 24 minutes here, two at a time on a two-processor runner. Three switches
 spread that, and none changes what passing means:
 
-- `UX_GATES_JOBS=<n>` runs that many gates at once; the default is one per processor.
+- `UX_GATES_JOBS=<n>` runs that many gates at once; the default is the session's `SLIPWAI_BROWSERS`, where
+  slipwai's captain started it, and one per processor otherwise. Several slices verifying on one machine
+  each took one per processor: hr-test-2 had twenty Chromes open for one slice, at a load of two hundred.
 - `UX_GATES_SHARD=<k>/<n>` runs every n-th gate from the k-th, so n CI jobs cover every gate exactly once
   between them. `verify.yml`'s `ux-gates` matrix, which the extension writes, is the one that sets it.
 - `UX_GATES_SINCE=<ref>` renders only the previews whose own file, or a local stylesheet they link or
   `@import`, changed since the merge base with `<ref>` (the working tree counts), and the directory gates
   only for an app with such a preview. Every preview again when this script, the extension, the lockfile
   or `verify.yml` moved, or when Git cannot answer. A pull request sets it; `main` never does, because
-  `main` deploys and a browser upgrade arrives without a diff. The file gate over `src/` always runs.
+  `main` deploys and a browser upgrade arrives without a diff. The file gate over `src/` always runs. A
+  session slipwai's captain started is a slice on its way to trunk, as a pull request is, so its
+  `SLIPWAI_TRUNK` is the ref where `UX_GATES_SINCE` is unset; and so is a branch of its own with neither set,
+  whose trunk is `origin/HEAD` (or `main`). Trunk itself, a detached HEAD and CI render every preview.
 
 Standard library only, like every gate script here; the kit's scripts are run as subprocesses.
 """
@@ -66,32 +72,35 @@ FILE_GATES = (
     ("verify_states.mjs", ("--dark",)),
 )
 # Which browser the kit's scripts can open, Playwright resolved from the kit's directory the way its scripts resolve
-# it from `scripts/` beneath — the same `node_modules` chain — and answered in one word: `chrome` (the channel the kit asks for), `bundled` (Playwright's own Chromium, which
-# `npx playwright install chromium` puts in place), `none`, or `no-playwright`.
+# it from `scripts/` beneath — the same `node_modules` chain — and answered in one word: `bundled` (Playwright's own
+# Chromium, which `npx playwright install chromium` puts in place), `chrome` (the installed channel the kit asks
+# for), `none`, or `no-playwright`. Playwright's Chromium is asked first: an installed Chrome took 10 s to close on
+# macOS, every per-file gate opens and closes its own, and 528 of them spent 88 minutes of a run waiting — the
+# same gate on Playwright's Chromium took 1.1 s, with the same verdict, and it is the browser CI measures on.
 PROBE = """
 let chromium;
 try { ({ chromium } = await import("playwright")); }
 catch { console.log("no-playwright"); process.exit(0); }
 if (!chromium) { console.log("no-playwright"); process.exit(0); }
-for (const [word, options] of [["chrome", { channel: "chrome" }], ["bundled", {}]]) {
+for (const [word, options] of [["bundled", {}], ["chrome", { channel: "chrome" }]]) {
   try { const browser = await chromium.launch(options); await browser.close(); console.log(word); process.exit(0); }
   catch {}
 }
 console.log("none");
 """
-# What every render gate is started with where only the bundled Chromium opens: the same Playwright the kit imports,
-# its `chromium.launch` retried without the channel when the channel is what failed. A CommonJS preload runs before
-# an ES module entry, and the kit's `import('playwright')` returns the same object this patched.
+# What every render gate is started with where Playwright's Chromium opens: the same Playwright the kit imports, its
+# `chromium.launch` asked without the channel the kit names, and with it only where that fails. A CommonJS preload
+# runs before an ES module entry, and the kit's `import('playwright')` returns the same object this patched.
 PRELOAD = """
 const { createRequire } = require("node:module");
 const playwright = createRequire({scripts})("playwright");
 const launch = playwright.chromium.launch.bind(playwright.chromium);
 playwright.chromium.launch = async (options = {}) => {
-  try { return await launch(options); }
+  const { channel, ...rest } = options;
+  try { return await launch(rest); }
   catch (error) {
-    if (!options.channel) throw error;
-    const { channel, ...rest } = options;
-    return launch(rest);
+    if (!channel) throw error;
+    return launch(options);
   }
 };
 """
@@ -208,14 +217,14 @@ def git(*arguments: str) -> str | None:
     return completed.stdout if completed.returncode == 0 else None
 
 
-def changed_since(ref: str) -> set[str] | None:
+def changed_since(ref: str, named: str = "UX_GATES_SINCE") -> set[str] | None:
     """What differs from the merge base with `ref`, working tree and untracked files included, relative to
     this project; None when Git cannot say, or when something every preview depends on is among it."""
     base = git("merge-base", ref, "HEAD")
     diff = git("diff", "--name-only", "--relative", base.strip()) if base else None
     untracked = git("ls-files", "--others", "--exclude-standard")
     if diff is None or untracked is None:
-        say(f"check-ux-gates: UX_GATES_SINCE={ref} — Git cannot name a merge base, so every preview is in scope")
+        say(f"check-ux-gates: {named}={ref} — Git cannot name a merge base, so every preview is in scope")
         return None
     changed = set(diff.split()) | set(untracked.split())
     here = Path(__file__).resolve()
@@ -224,9 +233,23 @@ def changed_since(ref: str) -> set[str] | None:
     moved = sorted(path.relative_to(ROOT).as_posix() for path in everything
                    if path.is_relative_to(ROOT) and path.relative_to(ROOT).as_posix() in changed)
     if moved:
-        say(f"check-ux-gates: UX_GATES_SINCE={ref} — {', '.join(moved)} changed, so every preview is in scope")
+        say(f"check-ux-gates: {named}={ref} — {', '.join(moved)} changed, so every preview is in scope")
         return None
     return changed
+
+
+def branch_trunk() -> str:
+    """Trunk, where this checkout is a branch of its own — a slice's verify run by hand renders what the slice
+    changed, as a captain's session already does through `SLIPWAI_TRUNK`; empty, so every preview renders, on
+    trunk itself, on a detached HEAD (CI's push to `main` checks one out), under CI, or where Git cannot say."""
+    if os.environ.get("CI"):
+        return ""
+    current = (git("branch", "--show-current") or "").strip()
+    named = (git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD") or "").strip()
+    trunk = named or next((ref for ref in ("main", "master") if git("rev-parse", "--verify", "--quiet", ref)), "")
+    if not current or not trunk or current == trunk.removeprefix("origin/"):
+        return ""
+    return trunk
 
 
 def local(reference: str, beside: Path) -> Path | None:
@@ -312,10 +335,12 @@ def run(gate: Gate, preload: Path | None = None) -> str:
 
 
 def jobs() -> int:
-    try:
-        return max(1, int(os.environ.get("UX_GATES_JOBS", "")))
-    except ValueError:
-        return os.cpu_count() or 1
+    for name in ("UX_GATES_JOBS", "SLIPWAI_BROWSERS"):
+        try:
+            return max(1, int(os.environ.get(name, "")))
+        except ValueError:
+            continue
+    return os.cpu_count() or 1
 
 
 def main() -> int:
@@ -346,13 +371,16 @@ def main() -> int:
             return 1
         gates = sharded
         say(f"check-ux-gates: shard {spec} — {len(gates)} of {whole} gate(s)")
-    since = os.environ.get("UX_GATES_SINCE", "").strip()
-    changed = changed_since(since) if since else None
+    named = "UX_GATES_SINCE" if os.environ.get("UX_GATES_SINCE", "").strip() else "SLIPWAI_TRUNK"
+    since = os.environ.get(named, "").strip()
+    if not since:
+        named, since = "trunk", branch_trunk()
+    changed = changed_since(since, named) if since else None
     unchanged = 0
     if changed is not None:
         kept = scoped(gates, changed)
         unchanged, gates = len(gates) - len(kept), kept
-        say(f"check-ux-gates: UX_GATES_SINCE={since} — {unchanged} render gate(s) over previews nothing changed, "
+        say(f"check-ux-gates: {named}={since} — {unchanged} render gate(s) over previews nothing changed, "
             "not rendered")
     skipped = 0
     render = [gate for gate in gates if gate.render]
@@ -370,7 +398,7 @@ def main() -> int:
             continue
         previews = len({gate.target for gate in mine if gate.target.is_file()})
         say(f"check-ux-gates: {relative}/screens/ — {previews} preview(s) through the render gates"
-            + (" on Playwright's Chromium, Chrome not being installed" if opened == "bundled" else ""))
+            + (" on an installed Chrome, Playwright's Chromium not being installed" if opened == "chrome" else ""))
     if opened in ("no-node", "none", "no-playwright"):
         gates = [gate for gate in gates if not gate.render]
     for gate in gates:
