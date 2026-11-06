@@ -1,5 +1,0 @@
-PATCH
-
-**The render gates open Playwright's Chromium first, so a full run takes minutes rather than most of an hour.** Every per-file gate opens and closes a browser of its own, four per preview, and the kit asks for an installed Chrome; on macOS that Chrome took 10 s to close, so recap's 528 per-file gates spent about 88 minutes of a run waiting for it. The probe now asks for Playwright's Chromium first — the browser CI already measures on — and an installed Chrome only where Playwright's is not installed. The same gate went from 11.5 s to 1.1 s with the same verdict; recap's full run from about 1 h 40 m to 9 m 23 s on one browser, and 2 m 28 s on four.
-
-**A branch of its own renders only what it changed, as a captain's session already did.** With neither `UX_GATES_SINCE` nor `SLIPWAI_TRUNK` set, a checkout on a branch other than trunk (`origin/HEAD`, or `main`) is scoped to what changed since trunk: a slice's `make verify` run by hand with one preview changed took 3 s. Trunk itself, a detached HEAD — which is what CI's push to `main` checks out — and any run under `CI` still render every preview, so nothing that deploys is scoped.

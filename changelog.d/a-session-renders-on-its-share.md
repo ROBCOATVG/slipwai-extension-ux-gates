@@ -1,3 +1,0 @@
-PATCH
-
-**A slice's verify renders on its share of the machine's browsers, and only the previews the slice changed.** Where slipwai's captain started the session, the render gates take `SLIPWAI_BROWSERS` as their default `UX_GATES_JOBS` and `SLIPWAI_TRUNK` as their default `UX_GATES_SINCE`. Several slices verifying on one machine each ran a browser per processor over every preview in the project: hr-test-2 had twenty Chromes open for one slice, at a load of two hundred, and every slice re-checked every other slice's screens. A slice is on its way to trunk as a pull request is, so it is scoped as one; trunk's own run and `verify.yml` still render everything. Either switch set by hand still wins.
