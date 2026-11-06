@@ -5,12 +5,15 @@ plugin87's ux-ui-agent-skills (https://github.com/plugin87/ux-ui-agent-skills, M
 useful half, for a delivery project, is its gates: scripts that measure a screen and either pass or fail
 — no literal colour, size or duration outside the design tokens; and, rendered in a real browser, WCAG
 contrast in light and dark across default, hover and focus, visible focus, target size, no horizontal
-overflow at phone widths, and axe's roles and names. `scripts/check-ux-gates.py` runs them and is part of
+overflow at phone widths, and axe's roles and names. `scripts/extensions/ux-gates/hooks/check.py` runs them and is part of
 `make verify` from the moment this extension is adopted; the kit's WCAG checklists and its review workflow
 are files under `tools/ux-gates/` that the `AGENTS.md` block below points at.
 
 The kit is installed, not vendored: `tools/ux-gates/` is ignored by Git (see `ignore` in `catalog.json`),
-pinned by the package version below and reproducible from this one command. A checkout without it — a
+pinned by the package version below and reproducible from this one command. What its render gates import is
+installed beside it, into its own `node_modules`, at the versions pinned below, with Playwright's Chromium:
+the kit names neither as a dependency, and a project that never added Playwright itself had render gates
+that skipped on every run — recap's, for fifteen days, with `make verify` green throughout. A checkout without it — a
 fresh clone, a CI runner — is what `check-ux-gates` reports as skipped rather than passed, and
 `UX_GATES_REQUIRE=1` turns that into a failure wherever the kit is expected to be present.
 
@@ -22,7 +25,7 @@ It also writes the one place the kit is expected: a `ux-gates` job in `.github/w
 markers so a second run rewrites it and nothing else. The render gates launch a browser per preview, so what
 they cost is linear in `screens/`; the job spreads them over `SHARDS` runners from the first screen rather
 than after a project has crossed its time budget, and on a pull request renders only the previews the change
-can move (`UX_GATES_SINCE`, which `scripts/check-ux-gates.py` explains). Every shard installs the kit and a
+can move (`UX_GATES_SINCE`, which `scripts/extensions/ux-gates/hooks/check.py` explains). Every shard installs the kit and a
 browser and sets `UX_GATES_REQUIRE=1`, so a shard that could not measure is red, never a skipped green. It
 sits inside `verify.yml` rather than beside it because a deploy is a `workflow_run` of `verify`.
 """
@@ -40,6 +43,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from guidance import record_extension, replace_block  # noqa: E402
 
 KIT_VERSION = "2.8.0"
+# What the kit's render gates import and never declare: Playwright, and the axe-core it otherwise fetches from a
+# CDN at the version its own fallback URL names — a fetch that fails is an audit skipped.
+PLAYWRIGHT_VERSION = "1.64.1"
+AXE_VERSION = "4.10.2"
 KIT_DIR = "tools/ux-gates"
 
 
@@ -70,14 +77,14 @@ the gates in it that are objective: a screen either passes or it does not.
 - **Always:** `{KIT_DIR}/scripts/lint_hardcodes.py` over each browser app's `src/`. A literal colour,
   pixel size or duration outside `tokens.css` fails the build; it is the rule `docs/design.md` already
   states, now measured. A justified exception carries a `ds-allow-hardcode` comment on its line.
-- **Where a browser is present** (`node`, `playwright` resolvable from the project root, and Chrome or
-  Playwright's own Chromium — `npx playwright install chromium`): the render gates over every `*.html`
+- **Where a browser is present** (`node`, and the Playwright and axe-core this extension pins installed into
+  `{KIT_DIR}/node_modules` with Playwright's own Chromium): the render gates over every `*.html`
   under each browser app's `screens/` — contrast in light and dark across default, hover and focus states,
   visible focus, target size, no overflow at 280/320/414px, and axe. A screen preview under `screens/` is
   what puts a screen under those gates; the live routes are not rendered, because the gates read files and
   the app needs its API. With no browser the render gates are reported as skipped, never as passed, and the
   gate says which browser it ran on. A gate that fails or crashes is never made to pass by editing
-  `scripts/check-ux-gates.py` or anything under `{KIT_DIR}/`: fix the screen, install the browser, or
+  `scripts/extensions/ux-gates/hooks/check.py` or anything under `{KIT_DIR}/`: fix the screen, install the browser, or
   report the gate's own words.
 
 **What this adds to `/drive`'s *Design review* rung.** Run `make check-ux-gates` first and fix what it
@@ -108,11 +115,32 @@ CI_BEGIN = "  # extension:ux-gates:begin"
 CI_END = "  # extension:ux-gates:end"
 
 
+def kit_runtime() -> str:
+    """Playwright and axe-core into the kit's own `node_modules`, and Playwright's Chromium: what its render gates
+    import resolves from there, so the project's manifest is never touched. Said, not raised: an extension may not
+    fail `./init`, and the gate itself reports a render gate it could not open as skipped, not passed."""
+    kit = ROOT / KIT_DIR
+    packages = subprocess.run(
+        # `--prefix`: from inside the kit, npm walks up to the project's own `package.json` and installs there.
+        ["npm", "install", "--prefix", str(kit), "--no-save", "--no-package-lock", "--no-audit", "--no-fund",
+         f"playwright@{PLAYWRIGHT_VERSION}", f"axe-core@{AXE_VERSION}"],
+        cwd=kit, check=False,
+    )
+    if packages.returncode != 0:
+        return (f"without Playwright {PLAYWRIGHT_VERSION} and axe-core {AXE_VERSION} (npm exited "
+                f"{packages.returncode}), so its render gates will report skipped")
+    browser = subprocess.run(["npx", "playwright", "install", "chromium"], cwd=kit, check=False)
+    if browser.returncode != 0:
+        return (f"with Playwright {PLAYWRIGHT_VERSION} and axe-core {AXE_VERSION} but not its Chromium (`npx "
+                f"playwright install chromium` in {KIT_DIR}/ exited {browser.returncode})")
+    return f"with Playwright {PLAYWRIGHT_VERSION}, its Chromium and axe-core {AXE_VERSION}"
+
+
 def ci_job(node: str) -> str:
     """The sharded job, naming this checkout's own paths so a delivery layout's `scripts/` is found too."""
     here = Path(__file__).resolve()
     install = here.relative_to(ROOT).as_posix()
-    gate = (here.parents[2] / "check-ux-gates.py").relative_to(ROOT).as_posix()
+    gate = (here.parent / "hooks/check.py").relative_to(ROOT).as_posix()
     shards = ", ".join(str(shard) for shard in range(1, SHARDS + 1))
     return f"""{CI_BEGIN}
   # The render gates, over {SHARDS} runners. `make verify` above reports them skipped, not passed,
@@ -138,6 +166,7 @@ def ci_job(node: str) -> str:
       - run: npm ci
       - run: python3 {install}
       - run: npx playwright install --with-deps chromium
+        working-directory: {KIT_DIR}
       - run: python3 {gate}
         env:
           UX_GATES_REQUIRE: '1'
@@ -229,8 +258,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 0
+    runtime = kit_runtime()
     project_guidance()
-    print(f"UX gates installed at {KIT_DIR}/ (ignored by Git); `make check-ux-gates` now runs them, and {ci_gates()}.")
+    print(f"UX gates installed at {KIT_DIR}/ (ignored by Git) {runtime}; `make check-ux-gates` now runs them, and "
+          f"{ci_gates()}.")
     return 0
 
 
