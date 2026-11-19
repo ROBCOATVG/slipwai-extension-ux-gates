@@ -2,6 +2,10 @@
 
 Release notes, newest first, one entry per released version; the entry being written is `changelog.d/`.
 
+## 1.0.2 — PATCH
+
+**CI proves this package against slipwai itself.** Its workflow installed the keel, called the shared release workflow and took the cloud target sources from `ROBCOATVG/slipwai_v2_Fork`, a fork archived on 2026-10-17 and 244 commits behind `ROBCOATVG/slipwai`. All of them now come from `ROBCOATVG/slipwai`; where a commit is pinned, it is the same commit, which both repositories hold. Nothing the package does in a project changes.
+
 ## 1.0.1
 
 **The render gates run where the extension is adopted, not only where a project happened to add Playwright.** The kit's render gates import Playwright and inject axe-core, and the kit declares neither: a project that never added Playwright itself had render gates that reported *skipped, not passed* on every run, and `make verify` green throughout — recap's, for fifteen days, while 22 of its screens ran 91px off a 280px phone. Adopting the extension now installs Playwright 1.64.1 and axe-core 4.10.2 into the kit's own `node_modules`, ignored by Git with the kit, and Playwright's Chromium, so the project's manifest is never touched. The same pre-fix checkout of recap, with only this extension, failed the overflow gate in 43 s.
